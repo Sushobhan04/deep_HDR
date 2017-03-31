@@ -13,6 +13,8 @@ from keras.layers.convolutional import (
     MaxPooling2D,
     AveragePooling2D
 )
+
+from keras.layers.merge import Multiply
 from keras.layers.normalization import BatchNormalization
 from keras import backend as K
 import numpy as np
@@ -23,6 +25,7 @@ from keras import callbacks
 from keras.callbacks import LearningRateScheduler,EarlyStopping
 import math
 import sys
+import cv2
 
 K.set_image_dim_ordering('th')
 
@@ -59,44 +62,63 @@ def BatchGenerator(files,batch_size, net_type = 'conv'):
 def SetGenerator(file):
     curr_data = h5py.File(file,'r')
     data = np.array(curr_data['data'])
-    label = np.array(curr_data['label'])*100
+    label = np.array(curr_data['label'])
     # print data.shape, label.shape
     return data,label
 
 def schedule(epoch):
-    lr = 0.0001
-    if epoch<10:
+    lr = 0.001
+    if epoch<50:
         return lr
-    elif epoch<20:
-        return lr/10
-    elif epoch<100:
-        return lr/100
+    elif epoch<200:
+        return lr/5
+    elif epoch<400:
+        return lr/50
     else:
-        return lr/8
+        return lr/500
 
 def create_cnn_model(input,output_shape = (1,128,128),border_mode = 'same'):
-    kernels = [3,3,3]
-    num_ker = [32,32,3]
+    kernels = [3,3,1]
+    num_ker = [256,256,16,1]
+    norm_axis = 1
     # pool_size = (2,2)
 
-    temp = Convolution2D(32, (kernels[0], kernels[0]), border_mode=border_mode, init = 'he_normal')(input)
-    # temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
+    temp = Convolution2D(num_ker[0], (kernels[0], kernels[0]), border_mode=border_mode, init = 'he_normal')(input)
+    temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
     temp = Activation('relu')(temp)
     # temp = MaxPooling2D(pool_size=pool_size)(temp)
     
-    temp = Convolution2D(32, (kernels[1], kernels[1]), border_mode=border_mode, init = 'he_normal')(temp)
-    # temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
+    temp = Convolution2D(num_ker[1], (kernels[1], kernels[1]), border_mode=border_mode, init = 'he_normal')(temp)
+    temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
     temp = Activation('relu')(temp)
+
+    temp = Convolution2D(num_ker[1], (kernels[1], kernels[1]), border_mode=border_mode, init = 'he_normal')(temp)
+    temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
+    temp = Activation('relu')(temp)
+
+    temp = Convolution2D(num_ker[1], (kernels[1], kernels[1]), border_mode=border_mode, init = 'he_normal')(temp)
+    temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
+    temp = Activation('relu')(temp)
+
+    temp = Convolution2D(num_ker[1], (kernels[1], kernels[1]), border_mode=border_mode, init = 'he_normal')(temp)
+    temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
+    temp = Activation('relu')(temp)
+
+    temp = Convolution2D(num_ker[2], (kernels[1], kernels[1]), border_mode=border_mode, init = 'he_normal')(temp)
+    temp = BatchNormalization(mode=0, axis=norm_axis)(temp)
+    temp = Activation('relu')(temp)
+
+    temp = Multiply()([input, temp])
     
 
-    temp = Convolution2D(3, (kernels[2], kernels[2]), border_mode=border_mode, init = 'he_normal')(temp)
+    temp = Convolution2D(num_ker[3], (kernels[2], kernels[2]), border_mode=border_mode, init = 'he_normal')(temp)
     # temp = BatchNormalization()(temp)
     # temp = Activation('relu')(temp)
 
 
-    model = Model(input=input, output=temp)
+    # model = Model(input=input, output=temp)
 
-    return model
+    return temp
 
 def create_dense_model(input,output_shape = (16,16),border_mode='same'):
     temp = Flatten()(input)
@@ -117,9 +139,17 @@ def create_dense_model(input,output_shape = (16,16),border_mode='same'):
     temp = Reshape(output_shape)(temp)
 
 
-    model = Model(input=input, output=temp)
+    # model = Model(input=input, output=temp)
 
-    return model
+    return temp
+
+def fit_model(model,data,label,params):
+    model.compile(loss=params['loss'],optimizer=params['optimizer'])
+
+    model.fit(data,label,validation_split=params['val_split'],nb_epoch = params['epochs'] ,verbose=params['verbose'] ,callbacks=params['callbacks'])
+
+    model.save(params['path_train']+'models/'+params['model_name']+'.h5')
+
 
 
 def train_model(path_train,home,model_name,mParam):
@@ -142,31 +172,49 @@ def train_model(path_train,home,model_name,mParam):
     border_mode = mParam['border_mode']
     norm_axis = 1
 
-    input = Input(shape=input_shape)
 
     if net_type=='dense':
-        model = create_dense_model(input,output_shape=output_shape,border_mode=border_mode)
+        pass
+
     elif net_type == 'conv':
-        model = create_cnn_model(input,output_shape=output_shape,border_mode=border_mode)
+        input1 = Input(shape=input_shape)
+        # input2 = Input(shape=input_shape)
+        # input3 = Input(shape=input_shape)
+        out1 = create_cnn_model(input1,output_shape=output_shape,border_mode=border_mode)
+        # out2 = create_cnn_model(input2,output_shape=output_shape,border_mode=border_mode)
+        # out3 = create_cnn_model(input3,output_shape=output_shape,border_mode=border_mode)
+        model = Model(input=input1, output=out1)
 
-
-    # sgd = Adadelta(lr=lrate, rho=0.95, epsilon=1e-08, decay=decay)
-    train_files = path_train+'datasets/'+'patch_32.h5'
+    train_files = path_train+'datasets/'+'patch_64.h5'
     # val_files = [path_train+'datasets/'+'valset_1.h5']
     data,label = SetGenerator(train_files)
+    print data.shape, label.shape
     
     lrate_sch = LearningRateScheduler(schedule)
-    early_stop = EarlyStopping(monitor='val_loss', min_delta=0, patience=5, verbose=0, mode='auto')
+    early_stop = EarlyStopping(monitor='val_loss', min_delta=0, patience=50, verbose=0, mode='auto')
     callbacks_list = [lrate_sch,early_stop]
 
     sgd = SGD(lr=lrate, momentum=0.9, decay=decay, nesterov=True)
 
-    model.compile(loss='mean_squared_error',
-              optimizer=sgd)
+    params = {}
+    params['loss'] = 'mean_squared_error'
+    params['optimizer'] = sgd
+    params['val_split'] = 0.1
+    params['epochs'] = epochs
+    params['verbose'] = 1
+    params['callbacks'] = callbacks_list
+    params['path_train'] = path_train
+    params['model_name'] = model_name
 
-    model.fit(data,label,validation_split=0.1,nb_epoch = epochs,verbose=1 ,callbacks=callbacks_list)
+    fit_model(model,data[:,0,:,:,:],label[:,0,:,:,:],params)
+    # print data[1,:,1,:,:].transpose((1,2,0)).shape
+    # print label[1,:,0,:,:].transpose((1,2,0)).shape
 
-    model.save(path_train+'models/'+model_name+'.h5')
+    # cv2.imwrite('sample_data.png',data[1,0,1,:,:]*255)
+    # cv2.imwrite('sample_label.png',label[1,0,0,:,:]*255)
+
+
+    
 
     # print model.summary()
 
@@ -179,13 +227,13 @@ def main():
 
     mParam = {}
     mParam['lrate'] = 0.001
-    mParam['epochs'] = 50
+    mParam['epochs'] = 500
     mParam['decay'] = 0.0
     mParam['net_type'] = 'conv'
     mParam['border_mode'] = 'same'
 
-    mParam['input_shape'] = (48,32,32)
-    mParam['output_shape'] = (3,32,32)
+    mParam['input_shape'] = (16,None,None)
+    mParam['output_shape'] = (1,None,None)
 
     mParam['train_batch_size'] = 128
     mParam['val_batch_size'] = 1
